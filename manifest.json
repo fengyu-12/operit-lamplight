@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "api_version": "2.0.0",
+  "toolpkg_id": "com.nyan.turn_guard",
+  "version": "0.6.11",
+  "author": [
+    "nyan"
+  ],
+  "main": "dist/main.js",
+  "display_name": {
+    "zh": "灯火阑珊",
+    "en": "Turn Guard"
+  },
+  "description": {
+    "zh": "让 AI 在跑偏前自己刹住。调用过多先提醒，原地打转就拦截，拦完还要求它交代已验证结果与阻塞。六个阈值全部可调，改完即时生效，正常任务零打扰。",
+    "en": "Keeps one AI turn from drifting: warns when calls pile up, blocks when it loops, then requires a clear hand-off. Six tunable thresholds, zero friction on normal work."
+  },
+  "enabled_by_default": true,
+  "subpackages": [
+    {
+      "id": "turn_guard",
+      "entry": "dist/tools.js",
+      "enabled_by_default": true
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+
+# 构建与打包产物（.toolpkg 走 GitHub Release 分发，不进仓库）
+artifacts/
+*.toolpkg
+
+# 单测产生的临时目录
+.test-jsonl/
+.test-data-v05/
+.test-config-v05/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 日志
+*.log
+npm-debug.log*

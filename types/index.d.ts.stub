@@ -1,0 +1,30 @@
+// 最小桩类型 —— 非官方 PackageBuilder types，仅供本地 tsc 校验。
+// 导入 Operit 前，请用 PackageBuilder/types 的真实 .d.ts 重编一次（本文件可整体替换）。
+declare interface ToolExecutionContext {
+  chatId?: string | null
+  participantId?: string | null
+  extensionOwner?: unknown
+  executionData?: unknown
+}
+declare interface ToolLifecycleEventPayload {
+  runtimeContext?: ToolExecutionContext | null
+  toolName?: string
+  parameters?: Record<string, string>
+}
+declare interface ToolLifecycleEvent {
+  event: string
+  eventName?: string
+  eventPayload?: ToolLifecycleEventPayload
+  timestampMs?: number
+  toolPkgId?: string
+}
+declare type ToolLifecycleHandler = (ev: ToolLifecycleEvent) =>
+  void | { action: 'allow' | 'block'; reason?: string }
+declare interface ToolPkgApi {
+  registerToolLifecycleHook(reg: { id: string; function: ToolLifecycleHandler }): void
+  registerToolPromptComposeHook(reg: { id: string; function: (ev: unknown) => unknown }): void
+  getConfigDir(): string
+  getLocalDataDir(): string
+  getSpaceDataDir(): string
+}
+declare const ToolPkg: ToolPkgApi

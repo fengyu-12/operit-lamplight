@@ -1,0 +1,43 @@
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const out = s => process.stdout.write(s+'\n');
+console.log = () => {};
+let failWrite=false, failDelete=true, deleted=[];
+global.ToolPkg={getConfigDir:()=>'/mock/config',getLocalDataDir:()=>'/mock/log'};
+global.Tools={Files:{exists:async()=>({exists:false}),mkdir:async()=>({successful:true}),write:async()=>({operation:{successful:!failWrite}}),list:async()=>({entries:['2026-11-08','2026-11-09','2026-11-15'].map(d=>({name:`turn_guard-${d}.jsonl`}))}),deleteFile:async p=>{deleted.push(p);return {successful:!failDelete};}}};
+const g=require('../dist/guard'); const tools=require('../dist/tools');
+const owner='com.nyan.turn_guard';
+const event=(chat,parameters={},ts=Date.UTC(2026,10,15,12))=>({event:'tool_call_intercept',timestampMs:ts,eventPayload:{toolName:'other_plugin:turn_guard_config',parameters,runtimeContext:{chatId:chat}}});
+function uiHarness(){
+ const state={booted:true,draft:{softCalls:10,hardCalls:50,repeatLimit:3,idleResetMsSec:120,hardBlock:true,warn:true}};
+ const nodes=[],toasts=[],calls=[];let response;
+ const sandbox={exports:{},setTimeout,Number,console};vm.createContext(sandbox);vm.runInContext(fs.readFileSync(__dirname+'/../dist/ui/settings/index.ui.js','utf8'),sandbox);
+ const ctx={useState:(k,v)=>[k in state?state[k]:v,x=>state[k]=x],UI:new Proxy({},{get:(_,type)=>(props,children)=>{const n={type,props,children};nodes.push(n);return n;}}),callTool:async(n,a)=>{calls.push(a);return response;},showToast:async s=>toasts.push(s)};
+ return {state,nodes,toasts,calls,setResponse:r=>response=r,render:async()=>{nodes.length=0;await sandbox.exports.default(ctx);},click:async label=>{const n=nodes.find(n=>n.props.onClick&&JSON.stringify(n.children).includes(`"text":"${label}"`));assert.ok(n,label);await n.props.onClick();}};
+}
+(async()=>{
+ await g.setConfig({hardCalls:1,repeatLimit:99,hardMs:1e12});
+ for(const [chat,p] of [['missing',{}],['foreign',{__operit_package_caller_owner:'other_plugin'}],['own',{__operit_package_caller_owner:owner}]]) assert.equal(g.onToolLifecycle(event(chat,p)),undefined);
+ out('PASS config exempt regardless of owner (M1)');
+ assert.equal((await tools.turn_guard_config({action:'set',patch:{hardBlock:false,warn:false}})).ok,true);
+ assert.equal((await g.getConfig()).hardBlock,false);assert.equal((await g.getConfig()).warn,false);
+ await tools.turn_guard_config({action:'reset'});assert.equal((await g.getConfig()).hardBlock,true);assert.equal((await g.getConfig()).warn,true);
+ out('PASS AI config switches accepted; reset restores true defaults');
+ const ui=uiHarness(); const cfg={...g.DEFAULTS};
+ ui.setResponse({__type:'StringResultData',value:JSON.stringify({ok:true,config:cfg})});await ui.render();await ui.click('恢复默认');
+ assert.equal(ui.state.draft.hardBlock,true);assert.equal(ui.state.draft.warn,true);
+ await ui.render();await ui.click('保存');assert.equal(ui.calls.at(-2).patch.hardBlock,true);assert.equal(ui.calls.at(-2).patch.warn,true);
+ out('PASS JSON-string wrapped reset -> save: hardBlock=true warn=true');
+ ui.toasts.length=0;ui.setResponse({content:JSON.stringify({ok:false,error:'disk full'})});await ui.render();await ui.click('保存');await ui.render();
+ assert.match(ui.state.error,/保存失败.*disk full/);assert.equal(ui.toasts.length,0);assert.ok(ui.nodes.some(n=>n.type==='Text'&&/保存失败/.test(n.props.text)));
+ out('PASS failed wrapped save renders error; no 已保存 toast');
+ ui.setResponse({ok:false,error:'read failed'});await ui.click('刷新');assert.match(ui.state.error,/读取配置失败/);
+ await ui.render();const field=ui.nodes.filter(n=>n.type==='TextField')[1];field.props.onValueChange('');assert.equal(ui.state.draft.softCalls,'');await ui.render();const count=ui.calls.length;await ui.click('保存');assert.equal(ui.calls.length,count);assert.match(ui.state.error,/正整数/);
+ out('PASS failed read rejected; empty editing state retained; invalid submit makes no call');
+ failWrite=true;const previous=await g.getConfig();await assert.rejects(g.resetConfig());assert.deepEqual(await g.getConfig(),previous);failWrite=false;
+ out('PASS failed reset does not mutate active config');
+ await g.flushEvents();assert.equal(deleted.length,0);assert.equal(g.readStatus().persistence.lastCleanupError,undefined);assert.ok(g.readStatus().recentEvents.length<=5);assert.ok(g.readStatus().recentEvents.every(line=>['soft_warning','block'].includes(JSON.parse(line).event)));
+ out('PASS timeline only records triggers, <=5 entries; no legacy cleanup');
+ out('ALL PASS (v0.6.2 regression)');
+})().catch(e=>{process.stderr.write(e.stack+'\n');process.exitCode=1;});
