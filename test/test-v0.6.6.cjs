@@ -45,10 +45,10 @@ function ev(event, toolName, ts, params, chatId) {
   await guard.setConfig({ softCalls: 9999, errRepeatLimit: 3, warn: true, hardBlock: true });
 
   // S3: every numeric field rejects fractions, unsafe integers and out-of-range values.
-  const numeric = ['softCalls','hardCalls','hardMs','idleResetMs','repeatLimit','errRepeatLimit'];
+  const numeric = ['softCalls','softMs','hardCalls','hardMs','idleResetMs','repeatLimit','errRepeatLimit'];
   for (const key of numeric) {
     const before = (await guard.getConfig())[key];
-    for (const value of [0.5, 1.5, 0, -1, NaN, Infinity, 1e9+1, Number.MAX_SAFE_INTEGER+1]) {
+    for (const value of [0.5, 1.5, ...(key === 'softMs' ? [] : [0]), -1, NaN, Infinity, 1e9+1, Number.MAX_SAFE_INTEGER+1]) {
       const res = await guard.setConfig({ [key]: value });
       check(`${key} rejects ${value}`, res.ok && res.config[key] === before);
     }
@@ -78,10 +78,11 @@ function ev(event, toolName, ts, params, chatId) {
   check('result with errorMessage does not clear chain',guard.readStatus().chats[0].errRepeat===1);
   guard.onToolLifecycle(ev('tool_call_intercept', 'a:t', t0));
 
-  // ① 时间维度已移除：61 秒后的事件不该触发提醒
+  // ① 隔离时长维度（softMs 拉大）：61 秒后的事件不该触发提醒
+  await guard.setConfig({ softMs: 1e9 });
   guard.onToolLifecycle(ev('tool_execution_finished', 'a:t', t0 + 61000));
   let s = guard.readStatus().chats[0];
-  check('61 秒后未提醒（时间维度已移除）', s.warned === false, { warned: s.warned });
+  check('softMs 拉大后 61 秒不提醒', s.warned === false, { warned: s.warned });
 
   // ② 同一工具+参数连错 2 次：还不够
   guard.onToolLifecycle(ev('tool_execution_error', 'b:fail', t0 + 62000));

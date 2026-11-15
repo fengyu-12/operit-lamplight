@@ -5,9 +5,11 @@
 
 export interface GuardConfig {
   softCalls: number
+  softMs: number
   errRepeatLimit: number
   hardCalls: number
   hardMs: number
+  activeResetMs: number
   idleResetMs: number
   repeatLimit: number
   hardBlock: boolean
@@ -15,12 +17,14 @@ export interface GuardConfig {
 }
 
 export const DEFAULTS: GuardConfig = {
-  softCalls: 10,
+  softCalls: 8,
+  softMs: 5 * 60_000,
   errRepeatLimit: 3,
   hardCalls: 50,
-  hardMs: 20 * 60_000,
+  hardMs: 15 * 60_000,
   repeatLimit: 3,
-  idleResetMs: 120000,
+  idleResetMs: 80000,
+  activeResetMs: 10 * 60_000,
   hardBlock: true,
   warn: true,
 }
@@ -39,6 +43,8 @@ interface Ev {
 
 interface State {
   chatId: string
+  activeSince: number
+  inFlight: string[]
   windowStart: number
   calls: number
   icCalls: number
@@ -82,10 +88,10 @@ let configLoadPromise: Promise<void> | null = null
 function clampConfig(raw: Partial<GuardConfig> | null | undefined): Partial<GuardConfig> {
   if (!raw || typeof raw !== 'object') return {}
   const out: Partial<GuardConfig> = {}
-  const nums: Array<keyof GuardConfig> = ['softCalls', 'hardCalls', 'hardMs', 'idleResetMs', 'repeatLimit', 'errRepeatLimit']
+  const nums: Array<keyof GuardConfig> = ['softCalls', 'softMs', 'hardCalls', 'hardMs', 'idleResetMs', 'activeResetMs', 'repeatLimit', 'errRepeatLimit']
   for (const k of nums) {
     const v = (raw as Record<string, unknown>)[k]
-    if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 && v <= 1e9) (out as Record<string, number>)[k] = v
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v >= (k === 'softMs' ? 0 : 1) && v <= 1e9) (out as Record<string, number>)[k] = v
   }
   const bools: Array<keyof GuardConfig> = ['hardBlock', 'warn']
   for (const k of bools) {
@@ -192,20 +198,25 @@ export function normalize(name: string, p: Record<string, string> = {}): string 
 function stateOf(chatId: string, now: number): State {
   if (!state || lastChatId !== chatId) {
     lastChatId = chatId
-    state = { chatId, windowStart: now, calls: 0, icCalls: 0, icRepeat: 0, icLastKey: '', warningPending: false, warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '', closingPending: false, closingSent: false }
+    state = { chatId, activeSince: now, inFlight: [], windowStart: now, calls: 0, icCalls: 0, icRepeat: 0, icLastKey: '', warningPending: false, warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '', closingPending: false, closingSent: false }
   }
   const s = state
   return s
 }
 
-/** 无 turn id 时，同 chat 严格空闲超过 120 秒即重置；持续活动不固定切窗。 */
+/** 计数窗口与活动墙钟解耦；在途调用不视为空闲，严格超过阈值才重置。 */
 function rollWindow(s: State, now: number) {
-  if (now - s.lastEventAt > cfg.idleResetMs) {
-    s.windowStart = now; s.calls = 0; s.warned = false; s.warnKind = ''
+  const gap = now - s.lastEventAt
+  if (s.inFlight.length) return
+  if (gap > Math.max(cfg.idleResetMs, cfg.activeResetMs)) {
+    s.activeSince = now
+    s.warned = false; s.warnKind = ''; s.warningPending = false
+    s.lastBlockReason = ''; s.closingPending = false; s.closingSent = false
+  }
+  if (gap > cfg.idleResetMs) {
+    s.windowStart = now; s.calls = 0
     s.repeat = 0; s.errRepeat = 0; s.lastKey = ''; s.lastErr = ''
     s.icCalls = 0; s.icRepeat = 0; s.icLastKey = ''
-    s.warningPending = false; s.lastBlockReason = ''
-    s.closingPending = false; s.closingSent = false
   }
 }
 
@@ -221,11 +232,18 @@ export function onToolLifecycle(ev: Ev): { action: 'allow' | 'block'; reason?: s
     if (ev.event === 'tool_call_requested') {
         // 白名单工具不计入本轮调用数与重复判定：点几次设置页不该推高 softCalls
         if (!isExemptTool(p.toolName)) {
+            const pendingKey = normalize(p.toolName ?? '', p.parameters);
+            if (!s.inFlight.includes(pendingKey)) s.inFlight.push(pendingKey);
             s.calls += 1;
             const key = normalize(p.toolName ?? '', p.parameters);
             s.repeat = key === s.lastKey ? s.repeat + 1 : 1;
             s.lastKey = key;
         }
+    }
+    // result/error/finished 对同一签名幂等结束在途，兼容宿主终态事件组合。
+    if (['tool_execution_result', 'tool_execution_error', 'tool_execution_finished'].includes(ev.event)) {
+      const key = normalize(p.toolName ?? '', p.parameters);
+      s.inFlight = s.inFlight.filter(k => k !== key);
     }
     // 成功结果立即打断失败链；错误结果不能冒充成功。
     if (ev.event === 'tool_execution_result' && p.success !== false && !p.errorMessage) {
@@ -251,7 +269,7 @@ export function onToolLifecycle(ev: Ev): { action: 'allow' | 'block'; reason?: s
             s.icLastKey = key;
             const hitRepeat = s.icRepeat >= cfg.repeatLimit;
             const hitBudget = s.icCalls >= cfg.hardCalls;
-            const hitTime = now - s.windowStart >= cfg.hardMs;
+            const hitTime = now - s.activeSince >= cfg.hardMs;
             if (hitRepeat || hitBudget || hitTime) {
                 s.lastBlockReason = hitRepeat ? '重复调用' : hitBudget ? '超出单轮工具调用预算' : '超出单轮时间预算';
                 s.icRepeat = 0;
@@ -270,15 +288,20 @@ export function onToolLifecycle(ev: Ev): { action: 'allow' | 'block'; reason?: s
 export const WARNING = '调用较多：交付结果、补一次关键验证、换一次实质不同方案、报告阻塞，四选一；继续前说明缺什么及结果如何改变下一步。'
 export const CLOSING = '立即用一条用户可见回复说明：已验证结果、未完成项、阻塞及可行下一步。不要再调用工具，不得伪称完成，无需添加“任务完成”结语。'
 export const WARNING_ERRORS = '同工具同参数已连续失败：仅可换一次实质不同方案，否则报告阻塞；最近两次调用均无进展时，停止工具并直接回复用户。'
+export const WARNING_TIME = '本轮耗时较久：向用户说明已验证结果与缺口，或报告阻塞并收尾；继续前说明下一步验证依据，无进展则收尾。'
 
 function checkWarning(s: State, now: number) {
-  // 软提醒只看两个信号：本轮调用次数、同一「工具+参数」连续失败次数。时间维度已移除。
+  // 软提醒三个信号：本轮调用次数、同一「工具+参数」连续失败次数、本轮时长。
+  // 时长从活动首个事件（activeSince）起算，在生命周期与 prompt 时检查；prompt 负责送达。
+  // 模型彻底停住（不再产生任何事件）时不会触发，抓的是「跑得久还在跑」。
   // 触发原因记进 state，注入时用对应文案，避免「一直报错」被说成「调用太多」。
   if (!cfg.warn || s.warned) return
   if (s.calls >= cfg.softCalls) {
     s.warned = true; s.warningPending = true; s.warnKind = 'calls'
   } else if (s.errRepeat >= cfg.errRepeatLimit) {
     s.warned = true; s.warningPending = true; s.warnKind = 'errors'
+  } else if (cfg.softMs > 0 && now - s.activeSince >= cfg.softMs) {
+    s.warned = true; s.warningPending = true; s.warnKind = 'time'
   }
 }
 
@@ -288,14 +311,15 @@ export function onToolPrompt(ev: ToolPkg.ToolPromptComposeHookEvent): ToolPkg.Pr
   const s = stateOf(p.chatId, ev.timestampMs ?? Date.now())
   const now = ev.timestampMs ?? Date.now()
   rollWindow(s, now)
+  s.lastEventAt = now
   checkWarning(s, now)
   if (s.closingPending && !s.closingSent) {
-    s.closingPending = false; s.closingSent = true
+    s.closingPending = false; s.closingSent = true; s.warningPending = false
     return { toolPrompt: (p.toolPrompt ?? '') + '\n' + CLOSING }
   }
   if (!s.warningPending) return
   s.warningPending = false
-  const text = s.warnKind === 'errors' ? WARNING_ERRORS : WARNING
+  const text = s.warnKind === 'errors' ? WARNING_ERRORS : (s.warnKind === 'time' ? WARNING_TIME : WARNING)
   recordEvent({ event: 'soft_warning', timestampMs: now, chatId: s.chatId, text })
   return { toolPrompt: (p.toolPrompt ?? '') + '\n' + text }
 }

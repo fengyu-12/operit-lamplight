@@ -2,7 +2,7 @@
   "schema_version": 1,
   "api_version": "2.0.0",
   "toolpkg_id": "com.nyan.turn_guard",
-  "version": "0.6.11",
+  "version": "0.8.0",
   "author": [
     "nyan"
   ],
@@ -12,8 +12,8 @@
     "en": "Turn Guard"
   },
   "description": {
-    "zh": "让 AI 在跑偏前自己刹住。调用过多先提醒，原地打转就拦截，拦完还要求它交代已验证结果与阻塞。六个阈值全部可调，改完即时生效，正常任务零打扰。",
-    "en": "Keeps one AI turn from drifting: warns when calls pile up, blocks when it loops, then requires a clear hand-off. Six tunable thresholds, zero friction on normal work."
+    "zh": "调用过多或耗时过久先提醒，原地打转就拦截，并要求交代已验证结果与阻塞。计数窗口与活动计时独立，八个阈值可调，即时生效。",
+    "en": "Warns on excessive calls or elapsed activity, blocks loops, and requests a clear hand-off. Independent count and time windows; eight tunable thresholds."
   },
   "enabled_by_default": true,
   "subpackages": [

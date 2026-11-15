@@ -19,3 +19,6 @@ Thumbs.db
 # 日志
 *.log
 npm-debug.log*
+
+# 本地编辑备份，不入仓库
+*.bak-*

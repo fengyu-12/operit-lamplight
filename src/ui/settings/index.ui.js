@@ -1,6 +1,6 @@
 "use strict";
 // 灯火阑珊 · 设置页（Compose DSL）
-// 布局：开关卡（硬停/提醒）→ 阈值卡（六个数值步进器：次数×3 + 秒/分钟×3）→
+// 布局：开关卡（硬停/提醒）→ 阈值卡（七个数值步进器：次数×3 + 秒/分钟×3）→
 //       操作行（保存/恢复默认/重置计数）→ 最近事件卡（折叠，调试用）。
 // 设计取舍见文件末尾注释。
 
@@ -11,6 +11,8 @@ function __operit_render_compose_dsl(ctx) {
 // 步进幅度：次数类阈值按 1 步进，毫秒类阈值按常用档位步进（避免用户手搓毫秒数）。
 var STEP = {
     softCalls: 1,
+    softMsMin: 1,
+    activeResetMsMin: 1,       // 软提醒时长按“分钟”步进，存储仍是毫秒
     hardCalls: 5,
     repeatLimit: 1,
     idleResetMsSec: 10, // 对 idleResetMs 按“秒”步进，UI 展示为秒，存储仍是毫秒
@@ -69,10 +71,10 @@ function checkedResult(raw) {
         throw new Error(res && res.error ? res.error : "配置响应无效或操作失败");
     return res;
 }
-function positiveInt(value) {
+function positiveInt(value, allowZero) {
     var text = String(value);
     var n = Number(text);
-    if (!/^\d+$/.test(text) || !Number.isSafeInteger(n) || n < 1 || n > Number.MAX_SAFE_INTEGER / 1000)
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(n) || n < (allowZero ? 0 : 1) || n > Number.MAX_SAFE_INTEGER / 1000)
         throw new Error("阈值必须为范围内的正整数");
     return n;
 }
@@ -98,7 +100,9 @@ async function Screen(ctx) {
 
     function fillDraftFrom(cfg) {
         return {
+            activeResetMsMin: Math.round((cfg.activeResetMs || 600000) / 60000),
             softCalls: cfg.softCalls,
+            softMsMin: Math.round((cfg.softMs == null ? 300000 : cfg.softMs) / 60000),
             hardCalls: cfg.hardCalls,
             repeatLimit: cfg.repeatLimit,
             idleResetMsSec: Math.round((cfg.idleResetMs || 120000) / 1000),
@@ -140,7 +144,9 @@ async function Screen(ctx) {
         try {
             var d = draft.value;
             var patch = {
+                activeResetMs: positiveInt(d.activeResetMsMin) * 60000,
                 softCalls: positiveInt(d.softCalls),
+                softMs: positiveInt(d.softMsMin, true) * 60000,
                 hardCalls: positiveInt(d.hardCalls),
                 repeatLimit: positiveInt(d.repeatLimit),
                 idleResetMs: positiveInt(d.idleResetMsSec) * 1000,
@@ -264,7 +270,7 @@ async function Screen(ctx) {
         ctx.UI.Column({ fillMaxWidth: true, padding: 12, spacing: 2 }, [
             ctx.UI.Text({ text: "行为设置", fontWeight: "bold", style: "bodySmall" }),
             toggleRow("达到上限时拦截", "hardBlock", "触及硬阈值后拒绝工具调用，而非仅作提示"),
-            toggleRow("接近阈值时提醒", "warn", "达到软阈值或同一做法连续失败时，注入一次提醒，不中断执行")
+            toggleRow("接近阈值时提醒", "warn", "达到软阈值、时长到点或同一做法连续失败时，注入一次提醒，不中断执行")
         ])
     ]));
 
@@ -278,13 +284,17 @@ async function Screen(ctx) {
             ctx.UI.Text({ text: "调用额度", fontWeight: "bold", style: "bodySmall" }),
             draft.value ? ctx.UI.Column({ fillMaxWidth: true }, [
                 stepRow("空闲重置", "idleResetMsSec", STEP.idleResetMsSec, 1, " 秒",
-                    "静默超过该时长，本轮计数清零，视为新的一轮。"),
+                    "无在途工具且静默超过该时长，仅清调用计数。"),
+                stepRow("活动断档", "activeResetMsMin", STEP.activeResetMsMin, 1, " 分钟",
+                    "无在途工具且静默超过此值与空闲重置的较大值，重开活动计时。"),
                 stepRow("软阈值", "softCalls", STEP.softCalls, 1, " 次",
                     "本轮累计调用达到该次数，注入一次提醒。"),
+                stepRow("提醒时长", "softMsMin", STEP.softMsMin, 0, " 分钟",
+                    "从活动首个事件计时；0 关闭时长提醒。"),
                 stepRow("硬阈值", "hardCalls", STEP.hardCalls, 1, " 次",
                     "本轮累计调用达到该次数，拒绝后续工具调用。"),
                 stepRow("硬停时长", "hardMsMin", STEP.hardMsMin, 1, " 分钟",
-                    "从本轮首次调用开始计时，到时拒绝工具调用。")
+                    "从活动首个事件计时，到时拒绝工具调用。")
             ]) : emptyHint()
         ])
     ]));

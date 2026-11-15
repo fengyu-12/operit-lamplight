@@ -1,11 +1,11 @@
 {
   "name": "operit-lamplight",
-  "version": "0.6.11",
+  "version": "0.8.0",
   "description": "Convergence guard for Operit ToolPkg: warn on runaway tool calls, block loops, then require a clear hand-off.",
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node test/test-v0.6.6.cjs && node test/test-v0.6.cjs && node test/test-v0.6.2.cjs && node test/test-v0.5-config.cjs && node test/test-v0.4.cjs",
+    "test": "node test/test-v0.4.cjs && node test/test-v0.5-config.cjs && node test/test-v0.6.cjs && node test/test-v0.6.2.cjs && node test/test-v0.6.6.cjs && node test/test-v0.7.cjs && node test/test-v0.8.cjs",
     "pack": "python3 tools/pack_toolpkg.py . artifacts/operit-lamplight.toolpkg"
   },
   "keywords": [

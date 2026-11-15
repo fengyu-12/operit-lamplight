@@ -33,7 +33,7 @@ function uiHarness(){
  assert.match(ui.state.error,/保存失败.*disk full/);assert.equal(ui.toasts.length,0);assert.ok(ui.nodes.some(n=>n.type==='Text'&&/保存失败/.test(n.props.text)));
  out('PASS failed wrapped save renders error; no 已保存 toast');
  ui.setResponse({ok:false,error:'read failed'});await ui.click('刷新');assert.match(ui.state.error,/读取配置失败/);
- await ui.render();const field=ui.nodes.filter(n=>n.type==='TextField')[1];field.props.onValueChange('');assert.equal(ui.state.draft.softCalls,'');await ui.render();const count=ui.calls.length;await ui.click('保存');assert.equal(ui.calls.length,count);assert.match(ui.state.error,/正整数/);
+ await ui.render();const field=ui.nodes.filter(n=>n.type==='TextField')[2];field.props.onValueChange('');assert.equal(ui.state.draft.softCalls,'');await ui.render();const count=ui.calls.length;await ui.click('保存');assert.equal(ui.calls.length,count);assert.match(ui.state.error,/正整数/);
  out('PASS failed read rejected; empty editing state retained; invalid submit makes no call');
  failWrite=true;const previous=await g.getConfig();await assert.rejects(g.resetConfig());assert.deepEqual(await g.getConfig(),previous);failWrite=false;
  out('PASS failed reset does not mutate active config');

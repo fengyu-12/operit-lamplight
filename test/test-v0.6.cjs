@@ -127,7 +127,8 @@ function ev(event, toolName, ts) {
   const hard = timed('tool_call_intercept', t0 + 2000);
   check('hardMs=2000：2 秒触发时间预算硬拦', hard?.action === 'block' && /时间预算/.test(hard.reason));
   await fresh.setConfig({ warn: false, idleResetMs: 1000 });
-  timed('tool_execution_finished', t0 + 3001);
+  timed('tool_execution_finished', t0 + 2001);
+  timed('tool_prompt_idle_probe', t0 + 3002);
   check('idleResetMs=1000：空闲超过 1 秒清零', fresh.readStatus().chats[0].calls === 0 && fresh.readStatus().chats[0].icCalls === 0 && !fresh.readStatus().chats[0].warned);
   await fresh.flushEvents();
   console.log(`\n结果: ${pass} PASS / ${fail} FAIL`);

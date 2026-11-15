@@ -3,10 +3,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const dir = path.join(__dirname, '.test-jsonl');
 let fail = false;
-global.ToolPkg = { getLocalDataDir: () => dir };
+global.ToolPkg = { getConfigDir: () => dir, getLocalDataDir: () => dir };
 global.Tools = { Files: {
   mkdir: async p => { fs.mkdirSync(p, {recursive:true}); return {successful:true}; },
   write: async (p, text, append) => {
+    if (p.endsWith("/config.json")) return {operation:{successful:true}};
     if (fail) return {operation:{successful:false}};
     assert.equal(append, false); fs.writeFileSync(p, text);
     return {operation:{successful:true}};
@@ -24,6 +25,7 @@ function state(chat) { return g.readStatus().chats.find(s => s.chatId === chat);
 function prompt(chat, t) { return g.onToolPrompt({event:'tool_prompt_compose',timestampMs:t,eventPayload:{chatId:chat,toolPrompt:'ORIGINAL',metadata:{}}}); }
 (async () => {
  try {
+  await g.setConfig({softMs:0});
   for (let i=0;i<10;i++) ev('calls','tool_call_requested',i,1000+i);
   assert.equal(state('calls').calls,10); assert.equal(state('calls').warned,true);
   const warning = prompt('calls',1010); assert.equal(warning.toolPrompt,'ORIGINAL\n'+g.WARNING);

@@ -33,8 +33,11 @@ const out = text => process.stdout.write(text + '\n');
 (async () => {
   // 1) get 读不到文件时回落到 DEFAULTS
   const initial = await g.getConfig();
-  assert.equal(initial.softCalls, 10);
+  assert.equal(initial.softCalls, 8);
   assert.equal(initial.hardCalls, 50);
+  assert.equal(initial.softMs, 300000);
+  assert.equal(initial.hardMs, 900000);
+  assert.equal(initial.idleResetMs, 80000);
   out('PASS get(): 无配置文件时返回 DEFAULTS');
 
   // 2) set 落盘 + 立即生效（同一进程内直接判定行为变化，不重装）
@@ -65,7 +68,7 @@ const out = text => process.stdout.write(text + '\n');
   const badRes = await g.setConfig({ hardCalls: -5, softCalls: 'nope', hardBlock: 'yes' });
   assert.equal(badRes.ok, true);
   assert.equal(badRes.config.hardCalls, 1, '负数非法值应被忽略，保留旧值');
-  assert.equal(badRes.config.softCalls, 10, '非数字应被忽略，保留默认');
+  assert.equal(badRes.config.softCalls, 8, '非数字应被忽略，保留默认');
   assert.equal(badRes.config.hardBlock, true, '非布尔应被忽略，保留默认 true');
   out('PASS set() 对非法字段 clamp：负数/非数字/非布尔被忽略，其余字段不受影响');
 
@@ -81,7 +84,7 @@ const out = text => process.stdout.write(text + '\n');
   const failRes = await g.setConfig({ softCalls: 2 });
   assert.equal(failRes.ok, false);
   assert.ok(failRes.error);
-  assert.equal((await g.getConfig()).softCalls, 10, '写盘失败不应改变已生效配置');
+  assert.equal((await g.getConfig()).softCalls, 8, '写盘失败不应改变已生效配置');
   failWrite = false;
   out('PASS 写盘失败: 返回 ok:false + error，内存态配置不被污染，不抛异常');
 

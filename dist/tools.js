@@ -23,8 +23,8 @@
       "name": "turn_guard_config",
       "display": { "label": { "zh": "灯火阑珊配置", "en": "Turn guard config" }, "icon": "settings" },
       "description": {
-        "zh": "读取或修改灯火阑珊阈值配置（softCalls/hardCalls/repeatLimit/errRepeatLimit/idleResetMs/hardMs；时间单位毫秒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
-        "en": "Read or update guard thresholds. action=get is read-only; action=set takes a partial patch, validated and applied immediately; action=reset restores defaults."
+        "zh": "读取或修改灯火阑珊阈值配置（softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs；时间单位毫秒；softMs=0 关闭时长提醒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
+        "en": "Read or update guard thresholds (softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs). action=get is read-only; action=set takes a partial patch, applied immediately; action=reset restores defaults."
       },
       "parameters": [
         {
