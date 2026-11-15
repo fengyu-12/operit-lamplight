@@ -6,6 +6,7 @@ exports.getConfig = getConfig;
 exports.setConfig = setConfig;
 exports.resetConfig = resetConfig;
 exports.normalize = normalize;
+exports.onChatMessage = onChatMessage;
 exports.onToolLifecycle = onToolLifecycle;
 exports.onToolPrompt = onToolPrompt;
 exports.flushEvents = flushEvents;
@@ -23,7 +24,8 @@ exports.DEFAULTS = {
     warn: true,
 };
 const cfg = { ...exports.DEFAULTS };
-let state;
+const states = new Map();
+const STATES_MAX = 8;
 let lastChatId;
 const recent = [];
 const RECENT_MAX = 5;
@@ -159,12 +161,34 @@ function normalize(name, p = {}) {
     return name + ':' + shortHash(serialized);
 }
 function stateOf(chatId, now) {
-    if (!state || lastChatId !== chatId) {
-        lastChatId = chatId;
-        state = { chatId, activeSince: now, inFlight: [], windowStart: now, calls: 0, icCalls: 0, icRepeat: 0, icLastKey: '', warningPending: false, warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '', closingPending: false, closingSent: false };
+    let s = states.get(chatId);
+    lastChatId = chatId;
+    if (!s) {
+        s = { chatId, lastSender: '(unknown)', lastSenderAt: 0, activeSince: now, inFlight: [], windowStart: now, calls: 0, icCalls: 0, icRepeat: 0, icLastKey: '', warningPending: false, warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '', closingPending: false, closingSent: false };
     }
-    const s = state;
+    // Map insertion order tracks access without changing event/window timestamps.
+    states.delete(chatId);
+    states.set(chatId, s);
+    if (states.size > STATES_MAX)
+        states.delete(states.keys().next().value);
     return s;
+}
+/** 用户消息和 AI 回复均结束旧计数；未知来源仅更新诊断字段。 */
+function onChatMessage(ev) {
+    if (ev?.event !== 'message_persisted')
+        return;
+    const p = ev.eventPayload ?? {};
+    const now = typeof ev.timestampMs === 'number' && Number.isFinite(ev.timestampMs) ? ev.timestampMs : Date.now();
+    const chatId = typeof p.chatId === 'string' ? p.chatId : '(no-chat)';
+    const normalizeSender = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
+    const sender = normalizeSender(p.sender);
+    const roleName = normalizeSender(p.roleName);
+    const boundary = ['user', 'human', '我', 'me', 'ai', 'assistant', 'bot', 'model', '助手'];
+    if (boundary.includes(sender) || boundary.includes(roleName))
+        states.delete(chatId);
+    const s = stateOf(chatId, now);
+    s.lastSender = sender || roleName || '(unknown)';
+    s.lastSenderAt = typeof p.timestamp === 'number' && Number.isFinite(p.timestamp) ? p.timestamp : now;
 }
 /** 计数窗口与活动墙钟解耦；在途调用不视为空闲，严格超过阈值才重置。 */
 function rollWindow(s, now) {
@@ -258,10 +282,10 @@ function onToolLifecycle(ev) {
             action: 'block', reason: decision.reason });
     return decision;
 }
-exports.WARNING = '调用较多：交付结果、补一次关键验证、换一次实质不同方案、报告阻塞，四选一；继续前说明缺什么及结果如何改变下一步。';
+exports.WARNING = '调用较多：先向用户报告一句当前进度（已确认什么、还在查什么）；未报告则停止工具调用，不要静默继续。';
 exports.CLOSING = '立即用一条用户可见回复说明：已验证结果、未完成项、阻塞及可行下一步。不要再调用工具，不得伪称完成，无需添加“任务完成”结语。';
-exports.WARNING_ERRORS = '同工具同参数已连续失败：仅可换一次实质不同方案，否则报告阻塞；最近两次调用均无进展时，停止工具并直接回复用户。';
-exports.WARNING_TIME = '本轮耗时较久：向用户说明已验证结果与缺口，或报告阻塞并收尾；继续前说明下一步验证依据，无进展则收尾。';
+exports.WARNING_ERRORS = '同工具同参数连续失败：向用户报告一句失败原因并停止工具调用；原因不明就说尚未查明，不要静默继续。';
+exports.WARNING_TIME = '本轮耗时较久：先向用户报告一句当前进展；未报告则停止工具调用，不要静默继续。';
 function checkWarning(s, now) {
     // 软提醒三个信号：本轮调用次数、同一「工具+参数」连续失败次数、本轮时长。
     // 时长从活动首个事件（activeSince）起算，在生命周期与 prompt 时检查；prompt 负责送达。
@@ -340,8 +364,8 @@ function readStatus() {
         phase: '1-warn+hard-block',
         persistence: { ...persistence },
         config: cfg,
-        // 兼容现有状态消费者；此数组最多一个元素，不保存历史会话。
-        chats: state ? [{ ...state }] : [],
+        // 最近事件优先；相同时间按最近访问优先，最多保留 8 个聊天。
+        chats: Array.from(states.values()).reverse().sort((a, b) => b.lastEventAt - a.lastEventAt).map(s => ({ ...s })),
         lastChatId,
         recentEvents: recent.slice(),
     };

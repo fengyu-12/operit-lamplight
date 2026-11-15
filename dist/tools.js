@@ -2,6 +2,7 @@
 /* METADATA
 {
   "name": "turn_guard",
+  "version": "0.8.3",
   "display_name": { "zh": "灯火阑珊", "en": "Turn Guard" },
   "description": {
     "zh": "对单轮任务做收敛判定：调用次数、同参重复、连续失败三路计数，超阈值时提醒或拦截，并按原因给出对应的收尾指令。",
@@ -10,6 +11,15 @@
   "enabledByDefault": true,
   "category": "System",
   "tools": [
+    {
+      "name": "directive_converge",
+      "advice": true,
+      "parameters": [],
+      "description": {
+        "zh": "【常驻指令 · 无需调用】\n交付前先说明：已确认什么、还缺什么。\n连续工具调用超过 8 次，先给用户一句当前进度再继续。\n同一工具同一参数连续失败 3 次：换一次实质不同的做法；换不了就报告阻塞。\n用户发来新消息即视为新一轮，重新计数。",
+        "en": "Before delivery, state what is confirmed and what is missing; after more than 8 consecutive tool calls, give the user a brief progress update before continuing. After 3 consecutive failures with the same tool and parameters, try a materially different approach or report a blocker; reset the count when a new user message arrives."
+      }
+    },
     {
       "name": "turn_guard_status",
       "display": { "label": { "zh": "灯火阑珊状态", "en": "Turn guard status" }, "icon": "info" },

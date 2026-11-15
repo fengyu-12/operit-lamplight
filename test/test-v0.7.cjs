@@ -73,7 +73,7 @@ const prompt = (ts, chatId) => guard.onToolPrompt({
   check('注入时长版文案', !!(inj && inj.toolPrompt && inj.toolPrompt.indexOf('耗时较久') >= 0), inj);
 
   // ③ 空闲重置：跨过 idleResetMs 后时长重新起算，不该立刻报警
-  const T1 = 5_000_000_000;
+  const T1 = T0 + 10000;
   guard.onToolLifecycle(ev('tool_call_requested', 'b:x', T1, null, 't-idle'));
   guard.onToolLifecycle(ev('tool_execution_finished', 'b:x', T1 + 90000, null, 't-idle'));
   s = guard.readStatus().chats[0];
@@ -81,7 +81,7 @@ const prompt = (ts, chatId) => guard.onToolPrompt({
 
   // ④ 次数与时长同时满足：先报 calls
   await guard.setConfig({ softMs: 1000, softCalls: 1 });
-  const T2 = 9_000_000_000;
+  const T2 = T1 + 100000;
   guard.onToolLifecycle(ev('tool_call_requested', 'c:y', T2, null, 't-prio'));
   guard.onToolLifecycle(ev('tool_execution_finished', 'c:y', T2 + 5000, null, 't-prio'));
   s = guard.readStatus().chats[0];

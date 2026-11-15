@@ -95,9 +95,9 @@ function ev(event, toolName, ts) {
   for (let n = 0; n < 8; n++) send('A', 'tool_call_requested', t0 + 100 + n);
   check('单计数器 A 调用 8 次', guard.readStatus().chats[0].calls === 8);
   send('B', 'tool_execution_finished', t0 + 110);
-  check('切 B 从 0 开始且清空重复/告警', guard.readStatus().chats.length === 1 && guard.readStatus().chats[0].calls === 0 && guard.readStatus().chats[0].repeat === 0 && !guard.readStatus().chats[0].warned);
+  check('新聊天 B 从 0 开始且状态独立', guard.readStatus().chats.length <= 8 && guard.readStatus().chats[0].calls === 0 && guard.readStatus().chats[0].repeat === 0 && !guard.readStatus().chats[0].warned);
   send('A', 'tool_execution_finished', t0 + 111);
-  check('切回 A 也从 0 开始', guard.readStatus().chats[0].calls === 0);
+  check('切回 A 保留 8 次调用', guard.readStatus().chats[0].calls === 8);
   const writesBefore = guard.readStatus().persistence.written;
   const timelineBefore = timeline;
   for (let n = 0; n < 20; n++) {

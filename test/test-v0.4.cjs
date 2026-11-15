@@ -40,10 +40,11 @@ function prompt(chat, t) { return g.onToolPrompt({event:'tool_prompt_compose',ti
     assert.equal(ev(chat,'tool_call_intercept','changed',2010),undefined);
     out('PASS '+order.join(' -> ')+': allow,allow,block; changed parameters allow');
   }
-  ev('calls','tool_call_intercept','new',121010);
+  for(let i=0;i<10;i++) ev('calls','tool_execution_finished',i,1020);
+  ev('calls','tool_call_intercept','new',602021);
   const s=state('calls'); assert.equal(s.calls,0); assert.equal(s.warned,false);
   assert.equal(s.icCalls,1); assert.equal(s.icRepeat,1); assert.equal(s.lastBlockReason,'');
-  out('PASS idle >120s: window and both counter sets reset');
+  out('PASS idle >activeResetMs: window and both counter sets reset');
   for(let i=0;i<6;i++) ev('time','tool_call_requested',i,300000+i*90000);
   assert.equal(state('time').warned,false); assert.equal(prompt('time',750000),undefined);
   out('PASS continuous activity does not trigger time-based soft warning');

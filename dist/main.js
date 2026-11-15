@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.turnGuardLifecycle = turnGuardLifecycle;
 exports.turnGuardPrompt = turnGuardPrompt;
+exports.turnGuardMessage = turnGuardMessage;
 exports.registerToolPkg = registerToolPkg;
 exports.status = status;
 /// <reference path="../../types/index.d.ts" />
@@ -22,8 +23,13 @@ function turnGuardPrompt(ev) {
     Promise.resolve((0, guard_1.flushEvents)()).catch(() => { });
     return result;
 }
+/** 消息落盘通知：具名导出以供宿主定位。 */
+function turnGuardMessage(ev) {
+    return (0, guard_1.onChatMessage)(ev);
+}
 /** Host 调用此函数完成注册；返回 true 表示注册成功。 */
 function registerToolPkg() {
+    ToolPkg.registerChatMessageHook({ id: 'turn_guard_message', function: turnGuardMessage });
     ToolPkg.registerToolLifecycleHook({ id: 'turn_guard_lifecycle', function: turnGuardLifecycle });
     ToolPkg.registerToolPromptComposeHook({ id: 'turn_guard_prompt', function: turnGuardPrompt });
     ToolPkg.registerUiRoute({
