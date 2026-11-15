@@ -75,5 +75,66 @@ function pass(text){console.log('PASS '+text);}
  await three();message({sender:'system',roleName:' Assistant '});a.equal(s().calls,0);
  message({chatId:undefined,sender:'user'});a.equal(g.readStatus().chats.find(s=>s.chatId==='(no-chat)').calls,0);a.ok(g.readStatus().chats.length<=8);
  pass('轮次边界 全部别名、大小写空白、roleName 后备及 no-chat');
+
+ // Fresh transpileModule + VM instances ensure no earlier get/set masks cold start.
+ const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+ const ts = require('typescript');
+ const compile = name => ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src', name), 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
+ const guardCode = compile('guard.ts');
+ function isolated(files) {
+   const exports = {};
+   vm.runInNewContext(guardCode, {exports, console, ToolPkg:{getConfigDir:()=>'/mock/config'}, Tools:{Files:files}});
+   return exports;
+ }
+ const sys = (mod, base='BASE') => mod.onSystemPrompt({eventPayload:{systemPrompt:base}});
+ let resolveExists, resolveRead, readStarted;
+ const reading = new Promise(r=>readStarted=r);
+ const cold = isolated({exists:()=>new Promise(r=>resolveExists=r),read:()=>new Promise(r=>{resolveRead=r;readStarted();})});
+ let settled=false;
+ const first=sys(cold).then(r=>{settled=true;return r;});
+ await Promise.resolve();a.equal(settled,false);
+ resolveExists({exists:true});await reading;a.equal(settled,false);
+ resolveRead({content:'{"softCalls":2}'});
+ a.match((await first).systemPrompt,/达到 2 次/);
+ pass('M1 cold delayed exists/read: first softCalls=2');
+ for (const failure of ['exists','read','parse']) {
+   const broken=isolated({exists:async()=>{if(failure==='exists')throw Error('disk');return {exists:true};},read:async()=>{if(failure==='read')throw Error('disk');return {content:'{'};}});
+   a.match((await sys(broken)).systemPrompt,/达到 8 次/);
+ }
+ pass('M1 disk/parse failures: defaults without rejection');
+ await fresh();const original=(await sys(g)).systemPrompt;
+ a.equal(await sys(g,original),undefined);
+ a.equal((await sys(g)).systemPrompt,original);
+ await g.setConfig({softCalls:2});
+ const updated=(await sys(g,original+'\nAFTER')).systemPrompt;
+ a.equal(updated.split('【收敛规则 · 灯火阑珊】').length-1,1);
+ a.match(updated,/达到 2 次/);a.doesNotMatch(updated,/达到 9999 次，先给用户/);a.ok(updated.endsWith('\nAFTER'));
+ const legacy=(await sys(g,'BEFORE\n【收敛规则 · 灯火阑珊】\nlegacy stale')).systemPrompt;
+ a.ok(legacy.startsWith('BEFORE\n'));a.doesNotMatch(legacy,/legacy stale/);
+ pass('S1 identical base idempotent; stale/legacy block replaced, surrounding text preserved');
+ await fresh({adviceEnabled:false,warn:true});a.equal(await sys(g),undefined);
+ await g.setConfig({adviceEnabled:true,warn:false,softCalls:2});a.match((await sys(g)).systemPrompt,/达到 2 次/);
+ event('tool_call_requested',0);event('tool_call_requested',1);a.equal(prompt(2),undefined);
+ let disk='{}';const files={exists:async()=>({exists:true}),read:async()=>({content:disk}),mkdir:async()=>({successful:true}),write:async(p,text)=>{disk=text;return {operation:{successful:true}};}};
+ const persisted=isolated(files);a.equal((await persisted.setConfig({adviceEnabled:false})).ok,true);
+ a.equal(JSON.parse(disk).adviceEnabled,false);a.equal((await isolated(files).getConfig()).adviceEnabled,false);
+ a.equal((await g.setConfig({adviceEnabled:'false'})).config.adviceEnabled,true);
+ pass('S3 independent switches + persisted false survives fresh module; invalid value ignored');
+ await fresh({hardBlock:false,warn:false,hardCalls:1,hardMs:1,softMs:90000});
+ const exact=(await sys(g)).systemPrompt;
+ a.match(exact,/1 分 30 秒/);a.match(exact,/0\.001 秒/);a.doesNotMatch(exact,/会收到|强制收尾/);
+ event('tool_call_requested',0);a.equal(event('tool_call_intercept',2),undefined);a.equal(prompt(2),undefined);a.equal(s().closingPending,false);
+ pass('S2/S4 no forced promise or action; 90000ms=1分30秒, 1ms=0.001秒');
+ await fresh({errRepeatLimit:3});
+ const failureRule=(await sys(g)).systemPrompt;a.match(failureRule,/先向用户说明失败原因与已试过的做法；再决定是否换一次实质不同的做法/);
+ for(let i=0;i<3;i++)event('tool_execution_error',i);
+ a.match(prompt(3).toolPrompt,/停止工具调用/);
+ pass('S5 failure rule reports first; WARNING_ERRORS still stops tools');
+ const mainExports={};let registered;
+ const host=new Proxy({registerSystemPromptComposeHook:o=>{registered=o.function;}},{get:(o,k)=>o[k]||(()=>{})});
+ vm.runInNewContext(compile('main.ts'),{exports:mainExports,ToolPkg:host,require:name=>name==='./guard'?g:{default:()=>{}},console});
+ mainExports.registerToolPkg();a.equal(registered,mainExports.turnGuardSystemPrompt);
+ const wrapped=registered({eventPayload:{systemPrompt:'BASE'}});a.equal(typeof wrapped.then,'function');await wrapped;
+ pass('M1/S6 registered turnGuardSystemPrompt returns thenable');
  await g.flushEvents();console.log('v0.8 全部通过');
 })().catch(e=>{console.error(e);process.exitCode=1;});

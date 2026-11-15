@@ -2,7 +2,7 @@
   "schema_version": 1,
   "api_version": "2.0.0",
   "toolpkg_id": "com.nyan.turn_guard",
-  "version": "0.8.3",
+  "version": "0.9.3",
   "author": [
     "nyan"
   ],

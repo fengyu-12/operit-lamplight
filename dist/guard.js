@@ -1,5 +1,5 @@
 "use strict";
-/// <reference path="../../types/index.d.ts" />
+/// <reference path="../types/index.d.ts" />
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WARNING_TIME = exports.WARNING_ERRORS = exports.CLOSING = exports.WARNING = exports.DEFAULTS = void 0;
 exports.getConfig = getConfig;
@@ -9,6 +9,7 @@ exports.normalize = normalize;
 exports.onChatMessage = onChatMessage;
 exports.onToolLifecycle = onToolLifecycle;
 exports.onToolPrompt = onToolPrompt;
+exports.onSystemPrompt = onSystemPrompt;
 exports.flushEvents = flushEvents;
 exports.readStatus = readStatus;
 exports.DEFAULTS = {
@@ -21,6 +22,7 @@ exports.DEFAULTS = {
     idleResetMs: 80000,
     activeResetMs: 10 * 60000,
     hardBlock: true,
+    adviceEnabled: true,
     warn: true,
 };
 const cfg = { ...exports.DEFAULTS };
@@ -52,7 +54,7 @@ function clampConfig(raw) {
         if (typeof v === 'number' && Number.isSafeInteger(v) && v >= (k === 'softMs' ? 0 : 1) && v <= 1e9)
             out[k] = v;
     }
-    const bools = ['hardBlock', 'warn'];
+    const bools = ['hardBlock', 'warn', 'adviceEnabled'];
     for (const k of bools) {
         const v = raw[k];
         if (typeof v === 'boolean')
@@ -330,6 +332,62 @@ function onToolPrompt(ev) {
     const text = s.warnKind === 'errors' ? exports.WARNING_ERRORS : (s.warnKind === 'time' ? exports.WARNING_TIME : exports.WARNING);
     recordEvent({ event: 'soft_warning', timestampMs: now, chatId: s.chatId, text });
     return { toolPrompt: (p.toolPrompt ?? '') + '\n' + text };
+}
+// ===== 0.9.0：常驻收敛规则走 system prompt 层 =====
+// 目的：绕过两个缺陷——① advice 必须 use_package 激活才进工具面；② toolPrompt 属低权限层。
+// 特征：无状态（不读不写计数器）、幂等（比较并更新自有块），因此不影响 onToolPrompt 的 warningPending 竞态。
+const PERSISTENT_MARK = '【收敛规则 · 灯火阑珊】';
+const PERSISTENT_END = '【收敛规则结束 · 灯火阑珊】';
+/**
+ * 常驻规则文本（0.9.1）：阈值取实时 cfg，不再写死。
+ * 起因：0.9.0 把「超过 8 次」写进常量，用户把 softCalls 改成 2 后，
+ * system prompt 里仍写 8，模型据此判断「还没到」，表现为完全不知道有新阈值。
+ */
+function persistentAdvice() {
+    const duration = (ms) => {
+        const minutes = Math.floor(ms / 60000);
+        const seconds = (ms % 60000) / 1000;
+        return minutes === 0 ? `${seconds} 秒` : seconds === 0 ? `${minutes} 分钟` : `${minutes} 分 ${seconds} 秒`;
+    };
+    const lines = [
+        PERSISTENT_MARK,
+        '交付前先说明：已确认什么、还缺什么。',
+        `连续工具调用达到 ${cfg.softCalls} 次，先给用户一句当前进度再继续。`,
+    ];
+    if (cfg.softMs > 0) {
+        lines.push(`本轮累计耗时达到 ${duration(cfg.softMs)}，同样先说清已拿到什么、还缺什么。`);
+    }
+    lines.push(`同一工具同一参数连续失败 ${cfg.errRepeatLimit} 次：先向用户说明失败原因与已试过的做法；再决定是否换一次实质不同的做法。`);
+    lines.push(`同一工具同一参数重复调用 ${cfg.repeatLimit} 次视为原地打转，会被按阻塞处理。`);
+    if (cfg.hardBlock) {
+        lines.push(`连续工具调用达到 ${cfg.hardCalls} 次、或本轮耗时达到 ${duration(cfg.hardMs)}，工具调用会被直接拒绝，此时只能直接收尾并说明阻塞。`);
+    }
+    else {
+        lines.push(`连续工具调用达到 ${cfg.hardCalls} 次、或本轮耗时达到 ${duration(cfg.hardMs)}，达到后仍不拦截，但请立即说明阻塞并收尾。`);
+    }
+    lines.push('用户发来新消息即视为新一轮，重新计数。', PERSISTENT_END);
+    return lines.join('\n');
+}
+/** 等待配置后组装；只替换带边界的自有块，兼容旧版无结束标记。 */
+async function onSystemPrompt(ev) {
+    await ensureConfigLoaded();
+    if (!cfg.adviceEnabled)
+        return;
+    const base = ev.eventPayload?.systemPrompt ?? '';
+    const block = persistentAdvice();
+    const start = base.indexOf(PERSISTENT_MARK);
+    let next;
+    if (start >= 0) {
+        const end = base.indexOf(PERSISTENT_END, start + PERSISTENT_MARK.length);
+        const stop = end < 0 ? base.length : end + PERSISTENT_END.length;
+        next = base.slice(0, start) + block + base.slice(stop);
+    }
+    else {
+        next = base + '\n\n' + block;
+    }
+    if (next === base)
+        return;
+    return { systemPrompt: next };
 }
 // 触发时间线：内存最多 5 条；串行覆盖固定文件，不再按天清理。
 let writeQueue = Promise.resolve();

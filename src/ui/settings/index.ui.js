@@ -109,6 +109,7 @@ async function Screen(ctx) {
             errRepeatLimit: Math.round(cfg.errRepeatLimit || 3),
             hardMsMin: Math.round((cfg.hardMs || 1200000) / 60000),
             hardBlock: !!cfg.hardBlock,
+            adviceEnabled: cfg.adviceEnabled !== false,
             warn: !!cfg.warn
         };
     }
@@ -153,6 +154,7 @@ async function Screen(ctx) {
                 errRepeatLimit: positiveInt(d.errRepeatLimit),
                 hardMs: positiveInt(d.hardMsMin) * 60000,
                 hardBlock: !!d.hardBlock,
+                adviceEnabled: !!d.adviceEnabled,
                 warn: !!d.warn
             };
             var res = checkedResult(await ctx.callTool("turn_guard:turn_guard_config", { action: "set", patch: patch }));
@@ -270,6 +272,7 @@ async function Screen(ctx) {
         ctx.UI.Column({ fillMaxWidth: true, padding: 12, spacing: 2 }, [
             ctx.UI.Text({ text: "行为设置", fontWeight: "bold", style: "bodySmall" }),
             toggleRow("达到上限时拦截", "hardBlock", "触及硬阈值后拒绝工具调用，而非仅作提示"),
+            toggleRow("常驻收敛规则", "adviceEnabled", "将收敛规则加入系统提示，与触发式提醒独立"),
             toggleRow("接近阈值时提醒", "warn", "达到软阈值、时长到点或同一做法连续失败时，注入一次提醒，不中断执行")
         ])
     ]));

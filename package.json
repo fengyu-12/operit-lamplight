@@ -1,6 +1,6 @@
 {
   "name": "operit-lamplight",
-  "version": "0.8.3",
+  "version": "0.9.3",
   "description": "Convergence guard for Operit ToolPkg: warn on runaway tool calls, block loops, then require a clear hand-off.",
   "private": true,
   "scripts": {

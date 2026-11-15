@@ -1,7 +1,7 @@
 /* METADATA
 {
   "name": "turn_guard",
-  "version": "0.8.3",
+  "version": "0.9.3",
   "display_name": { "zh": "灯火阑珊", "en": "Turn Guard" },
   "description": {
     "zh": "对单轮任务做收敛判定：调用次数、同参重复、连续失败三路计数，超阈值时提醒或拦截，并按原因给出对应的收尾指令。",
@@ -15,8 +15,8 @@
       "advice": true,
       "parameters": [],
       "description": {
-        "zh": "【常驻指令 · 无需调用】\n交付前先说明：已确认什么、还缺什么。\n连续工具调用超过 8 次，先给用户一句当前进度再继续。\n同一工具同一参数连续失败 3 次：换一次实质不同的做法；换不了就报告阻塞。\n用户发来新消息即视为新一轮，重新计数。",
-        "en": "Before delivery, state what is confirmed and what is missing; after more than 8 consecutive tool calls, give the user a brief progress update before continuing. After 3 consecutive failures with the same tool and parameters, try a materially different approach or report a blocker; reset the count when a new user message arrives."
+        "zh": "【常驻】收敛守卫已启用，阈值与开关见「灯火阑珊设置」。完整规则自 0.9.0 起改由 system prompt 层注入，此处仅保留入口提示。",
+        "en": "Persistent convergence guard; thresholds live in the Lamplight settings. Since 0.9.0 the full rules are injected through the system prompt layer, so this entry only keeps a pointer."
       }
     },
     {
@@ -32,7 +32,7 @@
       "name": "turn_guard_config",
       "display": { "label": { "zh": "灯火阑珊配置", "en": "Turn guard config" }, "icon": "settings" },
       "description": {
-        "zh": "读取或修改灯火阑珊阈值配置（softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs；时间单位毫秒；softMs=0 关闭时长提醒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
+        "zh": "读取或修改灯火阑珊阈值配置（softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs；hardBlock 控制拦截，warn 仅控制触发式提醒，adviceEnabled 独立控制常驻规则；时间单位毫秒；softMs=0 关闭时长提醒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
         "en": "Read or update guard thresholds (softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs). action=get is read-only; action=set takes a partial patch, applied immediately; action=reset restores defaults."
       },
       "parameters": [
