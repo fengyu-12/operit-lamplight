@@ -106,7 +106,7 @@ async function Screen(ctx) {
             hardCalls: cfg.hardCalls,
             repeatLimit: cfg.repeatLimit,
             idleResetMsSec: Math.round((cfg.idleResetMs || 120000) / 1000),
-            errRepeatLimit: Math.round(cfg.errRepeatLimit || 3),
+            failWarnLimit: cfg.failWarnLimit || 3,
             hardMsMin: Math.round((cfg.hardMs || 1200000) / 60000),
             hardBlock: !!cfg.hardBlock,
             adviceEnabled: cfg.adviceEnabled !== false,
@@ -151,7 +151,7 @@ async function Screen(ctx) {
                 hardCalls: positiveInt(d.hardCalls),
                 repeatLimit: positiveInt(d.repeatLimit),
                 idleResetMs: positiveInt(d.idleResetMsSec) * 1000,
-                errRepeatLimit: positiveInt(d.errRepeatLimit),
+                failWarnLimit: positiveInt(d.failWarnLimit),
                 hardMs: positiveInt(d.hardMsMin) * 60000,
                 hardBlock: !!d.hardBlock,
                 adviceEnabled: !!d.adviceEnabled,
@@ -273,7 +273,7 @@ async function Screen(ctx) {
             ctx.UI.Text({ text: "行为设置", fontWeight: "bold", style: "bodySmall" }),
             toggleRow("达到上限时拦截", "hardBlock", "触及硬阈值后拒绝工具调用，而非仅作提示"),
             toggleRow("常驻收敛规则", "adviceEnabled", "将收敛规则加入系统提示，与触发式提醒独立"),
-            toggleRow("接近阈值时提醒", "warn", "达到软阈值、时长到点或同一做法连续失败时，注入一次提醒，不中断执行")
+            toggleRow("接近阈值时提醒", "warn", "次数、时长或连续硬失败达到阈值时，拦下当次调用提醒一次，随后可重试继续")
         ])
     ]));
 
@@ -291,11 +291,11 @@ async function Screen(ctx) {
                 stepRow("活动断档", "activeResetMsMin", STEP.activeResetMsMin, 1, " 分钟",
                     "无在途工具且静默超过此值与空闲重置的较大值，重开活动计时。"),
                 stepRow("软阈值", "softCalls", STEP.softCalls, 1, " 次",
-                    "本轮累计调用达到该次数，注入一次提醒。"),
+                    "本轮达到阈值时仅软拦一次，汇报后可继续。被拦的那次也算一次调用。"),
                 stepRow("提醒时长", "softMsMin", STEP.softMsMin, 0, " 分钟",
                     "从活动首个事件计时；0 关闭时长提醒。"),
                 stepRow("硬阈值", "hardCalls", STEP.hardCalls, 1, " 次",
-                    "本轮累计调用达到该次数，拒绝后续工具调用。"),
+                    "本轮计入硬预算的调用达到该次数，拒绝后续工具调用；软提醒拦下的调用不计硬预算。"),
                 stepRow("硬停时长", "hardMsMin", STEP.hardMsMin, 1, " 分钟",
                     "从活动首个事件计时，到时拒绝工具调用。")
             ]) : emptyHint()
@@ -309,8 +309,9 @@ async function Screen(ctx) {
             draft.value ? ctx.UI.Column({ fillMaxWidth: true }, [
                 stepRow("相同调用", "repeatLimit", STEP.repeatLimit, 1, " 次",
                     "同一工具、同一参数连续出现多少次，判定为原地打转。"),
-                stepRow("相同失败", "errRepeatLimit", STEP.errRepeatLimit, 1, " 次",
-                    "同一工具、同一参数连续报错多少次，判定当前做法没有进展。")
+                stepRow("硬失败提醒", "failWarnLimit", 1, 1, " 次",
+                    "连续超时、权限、参数或执行异常；忽略非零退出码。"),
+                ctx.UI.Text({text:"相同失败 errRepeatLimit：暂不支持（宿主无对应事件）", color:"#888888", style:"labelSmall"})
             ]) : emptyHint()
         ])
     ]));

@@ -2,7 +2,7 @@
 /* METADATA
 {
   "name": "turn_guard",
-  "version": "0.9.3",
+  "version": "0.9.15",
   "display_name": { "zh": "灯火阑珊", "en": "Turn Guard" },
   "description": {
     "zh": "对单轮任务做收敛判定：调用次数、同参重复、连续失败三路计数，超阈值时提醒或拦截，并按原因给出对应的收尾指令。",
@@ -33,8 +33,8 @@
       "name": "turn_guard_config",
       "display": { "label": { "zh": "灯火阑珊配置", "en": "Turn guard config" }, "icon": "settings" },
       "description": {
-        "zh": "读取或修改灯火阑珊阈值配置（softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs；hardBlock 控制拦截，warn 仅控制触发式提醒，adviceEnabled 独立控制常驻规则；时间单位毫秒；softMs=0 关闭时长提醒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
-        "en": "Read or update guard thresholds (softCalls/softMs/hardCalls/hardMs/repeatLimit/errRepeatLimit/idleResetMs/activeResetMs). action=get is read-only; action=set takes a partial patch, applied immediately; action=reset restores defaults."
+        "zh": "读取或修改灯火阑珊阈值配置（softCalls/softMs/hardCalls/hardMs/repeatLimit/failWarnLimit/failWarnScope（hard 或 hard+fingerprint）；errRepeatLimit 仅兼容、暂不支持/idleResetMs/activeResetMs；hardBlock 控制拦截，warn 仅控制触发式提醒，adviceEnabled 独立控制常驻规则；时间单位毫秒；softMs=0 关闭时长提醒）。action=get 只读；action=set 需配 patch（部分字段即可，服务器端校验并立即生效）；action=reset 恢复默认值。",
+        "en": "Read or update guard thresholds (softCalls/softMs/hardCalls/hardMs/repeatLimit/failWarnLimit/failWarnScope（hard 或 hard+fingerprint）；errRepeatLimit 仅兼容、暂不支持/idleResetMs/activeResetMs). action=get is read-only; action=set takes a partial patch, applied immediately; action=reset restores defaults."
       },
       "parameters": [
         {

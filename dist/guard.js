@@ -1,7 +1,7 @@
 "use strict";
 /// <reference path="../types/index.d.ts" />
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WARNING_TIME = exports.WARNING_ERRORS = exports.CLOSING = exports.WARNING = exports.DEFAULTS = void 0;
+exports.DEFAULTS = void 0;
 exports.getConfig = getConfig;
 exports.setConfig = setConfig;
 exports.resetConfig = resetConfig;
@@ -10,12 +10,15 @@ exports.onChatMessage = onChatMessage;
 exports.onToolLifecycle = onToolLifecycle;
 exports.onToolPrompt = onToolPrompt;
 exports.onSystemPrompt = onSystemPrompt;
+
 exports.flushEvents = flushEvents;
 exports.readStatus = readStatus;
 exports.DEFAULTS = {
     softCalls: 8,
     softMs: 5 * 60000,
-    errRepeatLimit: 3,
+    errRepeatLimit: 3, // compatibility only; unsupported host event
+    failWarnLimit: 3,
+    failWarnScope: 'hard',
     hardCalls: 50,
     hardMs: 15 * 60000,
     repeatLimit: 3,
@@ -48,12 +51,13 @@ function clampConfig(raw) {
     if (!raw || typeof raw !== 'object')
         return {};
     const out = {};
-    const nums = ['softCalls', 'softMs', 'hardCalls', 'hardMs', 'idleResetMs', 'activeResetMs', 'repeatLimit', 'errRepeatLimit'];
+    const nums = ['softCalls', 'softMs', 'hardCalls', 'hardMs', 'idleResetMs', 'activeResetMs', 'repeatLimit', 'errRepeatLimit', 'failWarnLimit'];
     for (const k of nums) {
         const v = raw[k];
         if (typeof v === 'number' && Number.isSafeInteger(v) && v >= (k === 'softMs' ? 0 : 1) && v <= 1e9)
             out[k] = v;
     }
+    if (['hard', 'hard+fingerprint'].includes(raw.failWarnScope)) out.failWarnScope = raw.failWarnScope;
     const bools = ['hardBlock', 'warn', 'adviceEnabled'];
     for (const k of bools) {
         const v = raw[k];
@@ -101,18 +105,23 @@ async function getConfig() {
 async function setConfig(patch) {
     await ensureConfigLoaded();
     const clean = clampConfig(patch);
-    const next = { ...cfg, ...clean };
     try {
+        const path = configPath();
+        const exists = await Tools.Files.exists(path);
+        const base = exists.exists ? clampConfig(JSON.parse((await Tools.Files.read(path)).content)) : {};
+        const next = { ...exports.DEFAULTS, ...base, ...clean };
         const dir = ToolPkg.getConfigDir().replace(/\/$/, '');
         await Tools.Files.mkdir(dir, true);
         const result = await Tools.Files.write(configPath(), JSON.stringify(next, null, 2), false);
         if (!result.operation.successful)
             throw new Error('config write failed');
+        const verified = { ...exports.DEFAULTS, ...clampConfig(JSON.parse((await Tools.Files.read(path)).content)) };
+        if (Object.keys(next).some(k => verified[k] !== next[k])) throw new Error('config read-back mismatch');
+        Object.assign(cfg, verified);
     }
     catch (e) {
         return { ok: false, config: { ...cfg }, error: e instanceof Error ? e.message : String(e) };
     }
-    Object.assign(cfg, next); // 立即生效：所有判定都读这同一个 cfg 对象
     return { ok: true, config: { ...cfg } };
 }
 /** 恢复出厂默认，写盘并即时生效。 */
@@ -166,7 +175,7 @@ function stateOf(chatId, now) {
     let s = states.get(chatId);
     lastChatId = chatId;
     if (!s) {
-        s = { chatId, lastSender: '(unknown)', lastSenderAt: 0, activeSince: now, inFlight: [], windowStart: now, calls: 0, icCalls: 0, icRepeat: 0, icLastKey: '', warningPending: false, warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '', closingPending: false, closingSent: false };
+        s = { chatId, lastSender: '(unknown)', lastSenderAt: 0, activeSince: now, inFlight: [], requestedCall: null, windowStart: now, calls: 0, icCalls: 0, budgetCalls: 0, softBlockedTool: '', icRepeat: 0, icLastKey: '', warned: false, lastKey: '', repeat: 0, lastErr: '', errRepeat: 0, hardFailures: 0, failureFingerprint: '', failureKey: '', lastEventAt: now, lastBlockReason: '', exemptCalls: 0, warnKind: '' };
     }
     // Map insertion order tracks access without changing event/window timestamps.
     states.delete(chatId);
@@ -186,6 +195,8 @@ function onChatMessage(ev) {
     const sender = normalizeSender(p.sender);
     const roleName = normalizeSender(p.roleName);
     const boundary = ['user', 'human', '我', 'me', 'ai', 'assistant', 'bot', 'model', '助手'];
+    // 保留既有 assistant 边界：若宿主持久化中途 assistant，pending 也会清零。
+    // 尚无真实时序证据；此版不更改轮次语义，需设备日志另验。
     if (boundary.includes(sender) || boundary.includes(roleName))
         states.delete(chatId);
     const s = stateOf(chatId, now);
@@ -201,19 +212,23 @@ function rollWindow(s, now) {
         s.activeSince = now;
         s.warned = false;
         s.warnKind = '';
-        s.warningPending = false;
         s.lastBlockReason = '';
-        s.closingPending = false;
-        s.closingSent = false;
     }
     if (gap > cfg.idleResetMs) {
         s.windowStart = now;
         s.calls = 0;
         s.repeat = 0;
         s.errRepeat = 0;
+        s.hardFailures = 0;
+        s.failureFingerprint = '';
+        s.failureKey = '';
         s.lastKey = '';
         s.lastErr = '';
         s.icCalls = 0;
+        s.requestedCall = null;
+        s.budgetCalls = 0;
+        // Keep the soft-block exemption for delayed terminal events. A new request
+        // clears it; resetting count/time windows must not turn a reminder into a failure.
         s.icRepeat = 0;
         s.icLastKey = '';
     }
@@ -232,6 +247,10 @@ function onToolLifecycle(ev) {
             const pendingKey = normalize(p.toolName ?? '', p.parameters);
             if (!s.inFlight.includes(pendingKey))
                 s.inFlight.push(pendingKey);
+            s.requestedCall = { toolName: p.toolName, key: pendingKey };
+            s.failureKey = '';
+            // A new attempt ends the soft-block result exemption, even if no terminal event arrived.
+            s.softBlockedTool = '';
             s.calls += 1;
             const key = normalize(p.toolName ?? '', p.parameters);
             s.repeat = key === s.lastKey ? s.repeat + 1 : 1;
@@ -242,18 +261,31 @@ function onToolLifecycle(ev) {
     if (['tool_execution_result', 'tool_execution_error', 'tool_execution_finished'].includes(ev.event)) {
         const key = normalize(p.toolName ?? '', p.parameters);
         s.inFlight = s.inFlight.filter(k => k !== key);
+        if (s.requestedCall?.key === key)
+            s.requestedCall = null;
     }
-    // 成功结果立即打断失败链；错误结果不能冒充成功。
-    if (ev.event === 'tool_execution_result' && p.success !== false && !p.errorMessage) {
-        s.errRepeat = 0;
-        s.lastErr = '';
+    // A soft block returns as a host tool error, but no execution took place.
+    // Match by tool name: intercept parameters is a schema, not the requested arguments.
+    if (['tool_execution_result', 'tool_execution_error'].includes(ev.event) && !isExemptTool(p.toolName)
+        && (!s.softBlockedTool || s.softBlockedTool !== String(p.toolName ?? ''))) {
+        const errText = typeof p.errorMessage === 'string' ? p.errorMessage : '';
+        const hard = p.timedOut === true || /not allowed|Invalid tool invocation|Cannot access|Path is not a file/i.test(errText)
+            || errText.trim().length > 0 || ev.event === 'tool_execution_error';
+        const key = normalize(p.toolName ?? '', p.parameters);
+        const fingerprint = shortHash((p.timedOut === true ? 'timeout:' : '') + errText);
+        // A result + error pair for the same in-flight call counts only once.
+        if (hard) {
+            if (s.failureKey !== key) {
+                s.hardFailures = cfg.failWarnScope === 'hard+fingerprint' && s.failureFingerprint !== fingerprint ? 1 : s.hardFailures + 1;
+                s.failureFingerprint = fingerprint;
+                s.failureKey = key;
+            }
+        } else {
+            s.hardFailures = 0;
+            s.failureFingerprint = '';
+            s.failureKey = '';
+        }
     }
-    if (ev.event === 'tool_execution_error') {
-        const err = normalize(p.toolName ?? '', p.parameters);
-        s.errRepeat = err === s.lastErr ? s.errRepeat + 1 : 1;
-        s.lastErr = err;
-    }
-    checkWarning(s, now);
     let decision;
     if (ev.event === 'tool_call_intercept' && cfg.hardBlock) {
         if (isExemptTool(p.toolName)) {
@@ -261,19 +293,37 @@ function onToolLifecycle(ev) {
             s.exemptCalls += 1;
         }
         else {
-            const key = normalize(p.toolName ?? '', p.parameters);
+            // Associate the observed request with this intercept. Its parameters is a
+            // schema, so repeated schemas alone cannot establish repeated arguments.
+            const requested = s.requestedCall?.toolName === p.toolName ? s.requestedCall : null;
+            s.requestedCall = null;
+            const key = requested?.key ?? normalize(p.toolName ?? '', p.parameters);
             s.icCalls += 1;
             s.icRepeat = key === s.icLastKey ? s.icRepeat + 1 : 1;
             s.icLastKey = key;
             const hitRepeat = s.icRepeat >= cfg.repeatLimit;
-            const hitBudget = s.icCalls >= cfg.hardCalls;
+            const hitBudget = s.budgetCalls + 1 >= cfg.hardCalls;
             const hitTime = now - s.activeSince >= cfg.hardMs;
             if (hitRepeat || hitBudget || hitTime) {
+                s.budgetCalls += 1;
                 s.lastBlockReason = hitRepeat ? '重复调用' : hitBudget ? '超出单轮工具调用预算' : '超出单轮时间预算';
                 s.icRepeat = 0;
-                if (!s.closingSent)
-                    s.closingPending = true;
-                decision = { action: 'block', reason: s.lastBlockReason + '，本次调用已拦截。停止工具，直接回复用户：已验证结果、未完成项及阻塞；未验证内容不得当作完成。' };
+                decision = { action: 'block', reason: s.lastBlockReason + '，本次调用已拦截。请立即用一条用户可见回复说明：① 已验证结果 ② 未完成项 ③ 阻塞 ④ 可行下一步。不要再调用工具，不得伪称完成。' };
+            }
+            else {
+                const reason = checkWarning(s, now);
+                if (reason) {
+                    // Count the attempt in calls/icCalls, but neither in the execution budget
+                    // nor in the repeat streak. Retrying starts a fresh streak.
+                    s.icRepeat = 0;
+                    s.icLastKey = '';
+                    s.softBlockedTool = String(p.toolName ?? '');
+                    s.inFlight = s.inFlight.filter(k => k !== key);
+                    decision = { action: 'block', reason };
+                }
+                else {
+                    s.budgetCalls += 1;
+                }
             }
         }
     }
@@ -284,89 +334,47 @@ function onToolLifecycle(ev) {
             action: 'block', reason: decision.reason });
     return decision;
 }
-exports.WARNING = '调用较多：先向用户报告一句当前进度（已确认什么、还在查什么）；未报告则停止工具调用，不要静默继续。';
-exports.CLOSING = '立即用一条用户可见回复说明：已验证结果、未完成项、阻塞及可行下一步。不要再调用工具，不得伪称完成，无需添加“任务完成”结语。';
-exports.WARNING_ERRORS = '同工具同参数连续失败：向用户报告一句失败原因并停止工具调用；原因不明就说尚未查明，不要静默继续。';
-exports.WARNING_TIME = '本轮耗时较久：先向用户报告一句当前进展；未报告则停止工具调用，不要静默继续。';
+const SOFT_TAIL = '本次调用被拦下仅用于提醒，不是错误、不计失败。请先用一句用户可见的话说明当前进度（已确认什么 / 还在查什么），然后继续原任务；后续调用正常放行，不会再被这条提醒拦截。';
 function checkWarning(s, now) {
-    // 软提醒三个信号：本轮调用次数、同一「工具+参数」连续失败次数、本轮时长。
-    // 时长从活动首个事件（activeSince）起算，在生命周期与 prompt 时检查；prompt 负责送达。
-    // 模型彻底停住（不再产生任何事件）时不会触发，抓的是「跑得久还在跑」。
-    // 触发原因记进 state，注入时用对应文案，避免「一直报错」被说成「调用太多」。
-    if (!cfg.warn || s.warned)
-        return;
+    if (!cfg.hardBlock || !cfg.warn || s.warned) return;
+    let text;
     if (s.calls >= cfg.softCalls) {
-        s.warned = true;
-        s.warningPending = true;
         s.warnKind = 'calls';
+        text = `本轮已连续调用工具 ${s.calls} 次（阈值 ${cfg.softCalls}）。` + SOFT_TAIL;
     }
-    else if (s.errRepeat >= cfg.errRepeatLimit) {
-        s.warned = true;
-        s.warningPending = true;
+    else if (s.hardFailures >= cfg.failWarnLimit) {
         s.warnKind = 'errors';
+        text = `检测到连续硬失败 ${s.hardFailures} 次（超时 / 权限 / 参数 / 执行异常）。本次调用被拦下仅用于提醒，不是新的错误。请先报告失败原因与已试路径，再决定是否换一次实质不同的做法；后续调用正常放行。`;
     }
     else if (cfg.softMs > 0 && now - s.activeSince >= cfg.softMs) {
-        s.warned = true;
-        s.warningPending = true;
         s.warnKind = 'time';
+        text = `本轮已连续运行 ${Number(((now - s.activeSince) / 60000).toFixed(2))} 分钟（阈值 ${Number((cfg.softMs / 60000).toFixed(2))} 分钟）。` + SOFT_TAIL;
     }
+    if (!text) return;
+    s.warned = true;
+    return '【软提醒 · 灯火阑珊】' + text;
 }
-function onToolPrompt(ev) {
-    const p = ev.eventPayload;
-    if (!p.chatId)
-        return;
-    const s = stateOf(p.chatId, ev.timestampMs ?? Date.now());
-    const now = ev.timestampMs ?? Date.now();
-    rollWindow(s, now);
-    s.lastEventAt = now;
-    checkWarning(s, now);
-    if (s.closingPending && !s.closingSent) {
-        s.closingPending = false;
-        s.closingSent = true;
-        s.warningPending = false;
-        return { toolPrompt: (p.toolPrompt ?? '') + '\n' + exports.CLOSING };
-    }
-    if (!s.warningPending)
-        return;
-    s.warningPending = false;
-    const text = s.warnKind === 'errors' ? exports.WARNING_ERRORS : (s.warnKind === 'time' ? exports.WARNING_TIME : exports.WARNING);
-    recordEvent({ event: 'soft_warning', timestampMs: now, chatId: s.chatId, text });
-    return { toolPrompt: (p.toolPrompt ?? '') + '\n' + text };
-}
+// 兼容导出：宿主无轮内 prompt 注入点，不注册、不消费提醒。
+function onToolPrompt() {}
 // ===== 0.9.0：常驻收敛规则走 system prompt 层 =====
 // 目的：绕过两个缺陷——① advice 必须 use_package 激活才进工具面；② toolPrompt 属低权限层。
-// 特征：无状态（不读不写计数器）、幂等（比较并更新自有块），因此不影响 onToolPrompt 的 warningPending 竞态。
+// 特征：无状态（不读不写计数器）、幂等（比较并更新自有块），不会消费软提醒门闩。
 const PERSISTENT_MARK = '【收敛规则 · 灯火阑珊】';
 const PERSISTENT_END = '【收敛规则结束 · 灯火阑珊】';
-/**
- * 常驻规则文本（0.9.1）：阈值取实时 cfg，不再写死。
- * 起因：0.9.0 把「超过 8 次」写进常量，用户把 softCalls 改成 2 后，
- * system prompt 里仍写 8，模型据此判断「还没到」，表现为完全不知道有新阈值。
- */
+/** 固定定性文本：阈值、计时开关与失败口径变化不改写 system 前缀。 */
 function persistentAdvice() {
-    const duration = (ms) => {
-        const minutes = Math.floor(ms / 60000);
-        const seconds = (ms % 60000) / 1000;
-        return minutes === 0 ? `${seconds} 秒` : seconds === 0 ? `${minutes} 分钟` : `${minutes} 分 ${seconds} 秒`;
-    };
-    const lines = [
+    return [
         PERSISTENT_MARK,
         '交付前先说明：已确认什么、还缺什么。',
-        `连续工具调用达到 ${cfg.softCalls} 次，先给用户一句当前进度再继续。`,
-    ];
-    if (cfg.softMs > 0) {
-        lines.push(`本轮累计耗时达到 ${duration(cfg.softMs)}，同样先说清已拿到什么、还缺什么。`);
-    }
-    lines.push(`同一工具同一参数连续失败 ${cfg.errRepeatLimit} 次：先向用户说明失败原因与已试过的做法；再决定是否换一次实质不同的做法。`);
-    lines.push(`同一工具同一参数重复调用 ${cfg.repeatLimit} 次视为原地打转，会被按阻塞处理。`);
-    if (cfg.hardBlock) {
-        lines.push(`连续工具调用达到 ${cfg.hardCalls} 次、或本轮耗时达到 ${duration(cfg.hardMs)}，工具调用会被直接拒绝，此时只能直接收尾并说明阻塞。`);
-    }
-    else {
-        lines.push(`连续工具调用达到 ${cfg.hardCalls} 次、或本轮耗时达到 ${duration(cfg.hardMs)}，达到后仍不拦截，但请立即说明阻塞并收尾。`);
-    }
-    lines.push('用户发来新消息即视为新一轮，重新计数。', PERSISTENT_END);
-    return lines.join('\n');
+        '连续工具调用较多或本轮耗时较久时，先给用户一句当前进度再继续原任务。',
+        '连续硬失败时，先向用户说明失败原因与已试过的做法，再决定是否换一次实质不同的做法。',
+        '同一工具同一参数反复调用视为原地打转，启用硬拦截时会按阻塞处理。',
+        '启用硬拦截且达到调用或时长上限时，工具调用会被拒绝；请直接收尾并说明已验证结果、未完成项、阻塞与可行下一步。',
+        '触发式软提醒仅用于提醒，不是错误；先报告进度，然后继续原任务，后续调用正常放行。',
+        '具体阈值与开关见「灯火阑珊设置」。',
+        '用户发来新消息即视为新一轮，重新计数。',
+        PERSISTENT_END,
+    ].join('\n');
 }
 /** 等待配置后组装；只替换带边界的自有块，兼容旧版无结束标记。 */
 async function onSystemPrompt(ev) {

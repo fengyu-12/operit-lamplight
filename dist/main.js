@@ -39,7 +39,6 @@ function turnGuardMessage(ev) {
 function registerToolPkg() {
     ToolPkg.registerChatMessageHook({ id: 'turn_guard_message', function: turnGuardMessage });
     ToolPkg.registerToolLifecycleHook({ id: 'turn_guard_lifecycle', function: turnGuardLifecycle });
-    ToolPkg.registerToolPromptComposeHook({ id: 'turn_guard_prompt', function: turnGuardPrompt });
     ToolPkg.registerSystemPromptComposeHook({ id: 'turn_guard_system_prompt', function: turnGuardSystemPrompt });
     ToolPkg.registerUiRoute({
         id: 'turn_guard_settings',
